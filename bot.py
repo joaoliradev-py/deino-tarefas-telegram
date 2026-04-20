@@ -121,23 +121,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task_data = parse_task_message(text)
 
     try:
-        # Insere apenas campos originais (titulo, descricao, deadline)
+        # Salva no banco de dados original
         supabase.table("tarefas").insert(task_data).execute()
-        
-        msg = (
-            f"✅ **Tarefa cadastrada!**\n\n"
-            f"📌 **T: ** {task_data['titulo']}\n"
-            f"📝 **D: ** {task_data['descricao'] or '---'}\n"
-            f"📅 **P: ** {task_data['deadline'] or '---'}"
+
+        # Prepara a mensagem de confirmação "bonitinha"
+        msg_confirmacao = (
+            "✨ **Tarefa Salva no Meu Mundo!** ✨\n\n"
+            f"📌 **Título:** `{task_data['titulo']}`\n"
+            f"📝 **Descrição:** _{task_data['descricao'] or 'Sem detalhes'}_\n"
+            f"📅 **Prazo:** `{task_data['deadline'] or 'Não definido'}`\n\n"
+            "🔔 *Lembrete de 3 dias configurado com sucesso!*"
         )
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(msg_confirmacao, parse_mode='Markdown')
         
     except Exception as e:
         logging.error(f"Erro no Supabase: {e}")
         await update.message.reply_text(f"❌ Erro ao salvar: {str(e)}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"🚀 Bot Ativo!\nSeu ID: `{update.message.chat_id}`", parse_mode='Markdown')
+    chat_id = update.message.chat_id
+    welcome_msg = (
+        "👋 **Olá, Coder! Bem-vindo ao Deino Tarefas!**\n\n"
+        "Estou pronto para organizar sua rotina. Aqui está o modelo que eu mais gosto:\n\n"
+        "➖➖➖➖➖➖➖➖➖➖\n"
+        "**Título:** Estudar Python\n"
+        "**Descrição:** Ver aula sobre Bots\n"
+        "**Prazo:** Sexta-feira às 14h\n"
+        "➖➖➖➖➖➖➖➖➖➖\n\n"
+        "💡 *Dica:* Você também pode mandar só o título da tarefa relaxadamente!\n\n"
+        f"🆔 Seu ID para o `.env`: `{chat_id}`"
+    )
+    await update.message.reply_text(welcome_msg, parse_mode='Markdown')
 
 if __name__ == '__main__':
     if not all([TELEGRAM_TOKEN, SUPABASE_URL, SUPABASE_KEY]):
