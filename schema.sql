@@ -5,11 +5,10 @@ CREATE TABLE IF NOT EXISTS tarefas (
     descricao TEXT,                                    -- Descrição da tarefa
     deadline VARCHAR(50),                              -- Data Limite / Prazo (Texto)
     deadline_date DATE,                                -- Data Limite (Objeto Date para lembretes)
-    chat_id BIGINT,                                    -- ID do chat para enviar lembretes
     concluida BOOLEAN DEFAULT FALSE,                   -- Estado da tarefa
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- COMANDOS PARA ATUALIZAR TABELA EXISTENTE:
--- ALTER TABLE tarefas ADD COLUMN chat_id BIGINT;
--- ALTER TABLE tarefas ADD COLUMN deadline_date DATE;
+-- COMANDO PARA ATUALIZAR TABELA EXISTENTE:
+-- (Apenas deadline_date é necessário para o bot funcionar agora)
+-- ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS deadline_date DATE;
