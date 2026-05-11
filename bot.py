@@ -2,7 +2,7 @@ import os
 import logging
 import re
 import dateparser
-from datetime import datetime
+from datetime import datetime, date, timedelta, time
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
@@ -34,7 +34,7 @@ def parse_task_message(text):
     task_data = {
         "titulo": "Nova Tarefa",
         "descricao": "",
-        "deadline": datetime.now().strftime("%d/%m/%y")
+        "deadline": datetime.now().strftime("%Y-%m-%d")  # Formato ISO para o tipo DATE do Supabase
     }
     
     # 1. TENTA EXTRAIR POR PREFIXOS (Título:, Descrição:, Prazo:)
@@ -48,11 +48,18 @@ def parse_task_message(text):
         task_data["descricao"] = desc_match.group(1).strip()
     if deadline_match:
         raw_date = deadline_match.group(1).strip()
-        parsed_date = dateparser.parse(raw_date, settings={'DATE_ORDER': 'DMY', 'PREFER_DATES_FROM': 'future'})
+        parsed_date = dateparser.parse(
+            raw_date,
+            languages=['pt'],  # Força o parsing em Português
+            settings={
+                'DATE_ORDER': 'DMY',
+                'PREFER_DATES_FROM': 'future',
+            }
+        )
         if parsed_date:
-            task_data["deadline"] = parsed_date.strftime("%d/%m/%y")
+            task_data["deadline"] = parsed_date.strftime("%Y-%m-%d")  # ISO para o Supabase
         else:
-            task_data["deadline"] = raw_date # Fallback se não entender
+            task_data["deadline"] = datetime.now().strftime("%Y-%m-%d")  # Fallback: hoje
 
     # 2. SE NÃO USOU PREFIXOS, USA LÓGICA DE LINHAS
     if not titulo_match:
@@ -61,9 +68,16 @@ def parse_task_message(text):
             task_data["titulo"] = lines[0]
             if len(lines) > 1 and not desc_match:
                 # Tenta ver se a última linha parece uma data
-                possible_date = dateparser.parse(lines[-1], settings={'DATE_ORDER': 'DMY', 'PREFER_DATES_FROM': 'future'})
+                possible_date = dateparser.parse(
+                    lines[-1],
+                    languages=['pt'],  # Força o parsing em Português
+                    settings={
+                        'DATE_ORDER': 'DMY',
+                        'PREFER_DATES_FROM': 'future',
+                    }
+                )
                 if possible_date and len(lines) > 1:
-                    task_data["deadline"] = possible_date.strftime("%d/%m/%y")
+                    task_data["deadline"] = possible_date.strftime("%Y-%m-%d")  # ISO para o Supabase
                     task_data["descricao"] = " ".join(lines[1:-1])
                 else:
                     task_data["descricao"] = " ".join(lines[1:])
@@ -79,12 +93,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_chat.id
     msg = (
         "👋 **Olá! Eu sou o assistente do Deino Tarefas!**\n\n"
-        "Posso cadastrar tarefas direto no seu app desktop.\n"
-        "**Como usar:**\n"
-        "1. Mande apenas o nome da tarefa.\n"
-        "2. Ou use o formato:\n"
-        "   `Título: Estudar` \n"
-        "   `Prazo: amanhã` \n\n"
+        "Posso cadastrar tarefas direto no seu app desktop.\n\n"
+        "📋 **Formato completo:**\n"
+        "`Título: Estudar Python`\n"
+        "`Descrição: Ver aula sobre APIs REST`\n"
+        "`Prazo: amanhã`\n\n"
+        "⚡ **Formato rápido (sem prefixos):**\n"
+        "`Estudar Python`\n"
+        "`Ver aula sobre APIs REST`\n"
+        "`amanhã`\n"
+        "_1ª linha = título, meio = descrição, última = prazo_\n\n"
+        "⚠️ Descrição: máximo 200 caracteres.\n\n"
         "**Comandos:**\n"
         "/tarefas - Lista tarefas pendentes\n"
         "/concluir ID - Marca como feita\n"
@@ -115,6 +134,54 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Erro ao listar: {e}")
         await update.message.reply_text("❌ Erro ao buscar tarefas no banco.")
 
+async def verificar_prazos(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Roda diariamente às 09:00 e avisa sobre tarefas com prazo em 3 dias.
+    Filtra direto no Supabase usando o tipo DATE nativo.
+    """
+    if not MY_CHAT_ID:
+        logger.warning("MY_CHAT_ID não configurado. Lembretes desativados.")
+        return
+
+    alerta_data = (date.today() + timedelta(days=3)).isoformat()  # ex: '2026-05-14'
+    logger.info(f"Verificando tarefas com prazo em: {alerta_data}")
+
+    try:
+        res = supabase.table("tarefas") \
+            .select("*") \
+            .eq("concluida", False) \
+            .eq("deadline", alerta_data) \
+            .execute()
+
+        tarefas = res.data
+        if not tarefas:
+            logger.info("Nenhuma tarefa com prazo em 3 dias hoje.")
+            return
+
+        for tarefa in tarefas:
+            # Formata data para exibição: YYYY-MM-DD → DD/MM/AAAA
+            try:
+                d = date.fromisoformat(tarefa['deadline'])
+                deadline_display = d.strftime("%d/%m/%Y")
+            except Exception:
+                deadline_display = tarefa['deadline']
+
+            mensagem = (
+                f"⚠️ **LEMBRETE DE PRAZO!**\n\n"
+                f"A tarefa **{tarefa['titulo']}** vence em 3 dias!\n"
+                f"📅 Prazo: {deadline_display}\n\n"
+                f"Não esqueça de finalizá-la! 💪"
+            )
+            await context.bot.send_message(
+                chat_id=MY_CHAT_ID,
+                text=mensagem,
+                parse_mode='Markdown'
+            )
+            logger.info(f"Lembrete enviado para tarefa '{tarefa['titulo']}' (prazo: {alerta_data})")
+
+    except Exception as e:
+        logger.error(f"Erro na verificação de prazos: {e}")
+
 async def done_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /concluir ID"""
     if not context.args:
@@ -142,10 +209,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Insere no Supabase
         supabase.table("tarefas").insert(task_data).execute()
 
+        # Formata a data para exibição amigável: YYYY-MM-DD → DD/MM/AAAA
+        try:
+            from datetime import date
+            d = date.fromisoformat(task_data['deadline'])
+            deadline_display = d.strftime("%d/%m/%Y")
+        except Exception:
+            deadline_display = task_data['deadline']
+
         msg = (
             "✨ **Tarefa Salva!**\n"
             f"📌 **{task_data['titulo']}**\n"
-            f"📅 Prazo: `{task_data['deadline']}`\n"
+            f"📅 Prazo: `{deadline_display}`\n"
             f"📝 {task_data['descricao'] or 'Sem descrição'}"
         )
         await update.message.reply_text(msg, parse_mode='Markdown')
@@ -163,12 +238,23 @@ if __name__ == '__main__':
         logger.info("✅ Conexão com Supabase estabelecida.")
 
         app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-        
-        # Handlers
+
+        # Handlers de comandos e mensagens
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("tarefas", list_tasks))
         app.add_handler(CommandHandler("concluir", done_task))
         app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-        
+
+        # Job diário de lembrete às 09:00
+        if MY_CHAT_ID:
+            app.job_queue.run_daily(
+                verificar_prazos,
+                time=time(hour=11, minute=0),  # 11:00 UTC = 08:00 Brasília (UTC-3)
+                name="lembrete_prazo"
+            )
+            logger.info("🔔 Lembrete diário agendado para 08:00 (horário de Brasília).")
+        else:
+            logger.warning("⚠️ MY_CHAT_ID não definido — lembretes desativados.")
+
         logger.info("🚀 Bot do Deino iniciado e pronto para agir!")
         app.run_polling()
